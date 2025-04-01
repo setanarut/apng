@@ -3,8 +3,6 @@
 # apng
 APNG encoder
 
-![animated_gopher](_example/res/animated_gopher.png)
-
 ## Installation
 
 ```sh
@@ -51,4 +49,5 @@ var noisePalette = []color.RGBA{
 }
 ```
 
+![out](https://github.com/user-attachments/assets/b9c5d4f9-7479-479b-a2c3-a4642f5ccde3)
 
