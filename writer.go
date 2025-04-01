@@ -1,3 +1,4 @@
+// apng is Animated PNG (APNG) encoder
 package apng
 
 import (
@@ -11,15 +12,8 @@ import (
 )
 
 type idat []byte
-type CompressionLevel int
-type Encoder struct {
-	CompressionLevel CompressionLevel
-}
 
-const (
-	pngHeader = "\x89PNG\r\n\x1a\n"
-	filterNum = 5 // none, sub, up, average, paeth
-)
+const pngHeader string = "\x89PNG\r\n\x1a\n"
 
 const (
 	dsStart = iota
@@ -29,28 +23,6 @@ const (
 	dsSeenIDAT
 	dsSeenIEND
 )
-
-const (
-	DefaultCompression CompressionLevel = 0
-	NoCompression      CompressionLevel = -1
-	BestSpeed          CompressionLevel = -2
-	BestCompression    CompressionLevel = -3
-)
-
-// func levelToZlib(l CompressionLevel) int {
-// 	switch l {
-// 	case DefaultCompression:
-// 		return zlib.DefaultCompression
-// 	case NoCompression:
-// 		return zlib.NoCompression
-// 	case BestSpeed:
-// 		return zlib.BestSpeed
-// 	case BestCompression:
-// 		return zlib.BestCompression
-// 	default:
-// 		return zlib.DefaultCompression
-// 	}
-// }
 
 func writeUint16(b []uint8, u uint16) {
 	b[0] = uint8(u >> 8)
@@ -64,6 +36,7 @@ func writeUint32(b []uint8, u uint32) {
 	b[3] = uint8(u)
 }
 
+// APNG encapsulates animated PNG frames, their delays, disposal methods, loop count, and global configuration.
 type APNG struct {
 	Images    []image.Image // The successive images.
 	Delays    []uint16      // The successive delay times, one per frame, in 100ths of a second.
@@ -73,8 +46,8 @@ type APNG struct {
 }
 
 type encoder struct {
-	a      *APNG
-	w      io.Writer
+	aPNG   *APNG
+	writer io.Writer
 	seqNum uint32 // Sequence number of the animation chunk.
 
 	tmpHeader [8]byte
@@ -103,13 +76,13 @@ func (e *encoder) writeChunk(b []byte, name string) {
 	e.tmpHeader[5] = name[1]
 	e.tmpHeader[6] = name[2]
 	e.tmpHeader[7] = name[3]
-	_, e.err = e.w.Write(e.tmpHeader[:8])
+	_, e.err = e.writer.Write(e.tmpHeader[:8])
 	if e.err != nil {
 		return
 	}
 
 	// Write data.
-	_, e.err = e.w.Write(b)
+	_, e.err = e.writer.Write(b)
 	if e.err != nil {
 		return
 	}
@@ -119,7 +92,7 @@ func (e *encoder) writeChunk(b []byte, name string) {
 	crc.Write(e.tmpHeader[4:8])
 	crc.Write(b)
 	writeUint32(e.tmpFooter[:4], crc.Sum32())
-	_, e.err = e.w.Write(e.tmpFooter[:4])
+	_, e.err = e.writer.Write(e.tmpFooter[:4])
 }
 
 func (e *encoder) writeIHDR() {
@@ -127,46 +100,22 @@ func (e *encoder) writeIHDR() {
 }
 
 func (e *encoder) writeacTL() {
-	writeUint32(e.tmp[0:4], uint32(len(e.a.Images)))
-	writeUint32(e.tmp[4:8], e.a.LoopCount)
+	writeUint32(e.tmp[0:4], uint32(len(e.aPNG.Images)))
+	writeUint32(e.tmp[4:8], e.aPNG.LoopCount)
 	e.writeChunk(e.tmp[:8], "acTL")
 }
 
 func (e *encoder) writefcTL(frameIndex int) {
-	// Write sequence_number.
-	writeUint32(e.tmp[0:4], e.seqNum)
-
-	bounds := (e.a.Images[frameIndex]).Bounds()
-
-	// Write width.
-	writeUint32(e.tmp[4:8], uint32(bounds.Max.X-bounds.Min.X))
-
-	// Write height.
-	writeUint32(e.tmp[8:12], uint32(bounds.Max.Y-bounds.Min.Y))
-
-	// Write x_offset.
-	writeUint32(e.tmp[12:16], uint32(bounds.Min.X))
-
-	// Write y_offset.
-	writeUint32(e.tmp[16:20], uint32(bounds.Min.Y))
-
-	// Write delay_num(numerator).
-	writeUint16(e.tmp[20:22], e.a.Delays[frameIndex])
-
-	// Write delay_den(denominator).
-	writeUint16(e.tmp[22:24], uint16(100))
-
-	// Write dispose_op.
-	//switch d := e.a.Disposals[frameIndex]; d {
-	//case 0, 1, 2:
-	//	e.tmp[24] = d
-	//default:
-	//	e.tmp[24] = 0
-	//}
+	writeUint32(e.tmp[0:4], e.seqNum) // Write sequence_number.
+	bounds := (e.aPNG.Images[frameIndex]).Bounds()
+	writeUint32(e.tmp[4:8], uint32(bounds.Max.X-bounds.Min.X))  // Write width.
+	writeUint32(e.tmp[8:12], uint32(bounds.Max.Y-bounds.Min.Y)) // Write height.
+	writeUint32(e.tmp[12:16], uint32(bounds.Min.X))             // Write x_offset.
+	writeUint32(e.tmp[16:20], uint32(bounds.Min.Y))             // Write y_offset.
+	writeUint16(e.tmp[20:22], e.aPNG.Delays[frameIndex])        // Write delay_num(numerator).
+	writeUint16(e.tmp[22:24], uint16(100))                      // Write delay_den(denominator).
 	e.tmp[24] = 0
-
-	// Write blend_op.
-	e.tmp[25] = 0
+	e.tmp[25] = 0 // Write blend_op.
 
 	e.writeChunk(e.tmp[:26], "fcTL")
 	e.seqNum++
@@ -197,19 +146,13 @@ type chunkFetcher struct {
 	bb    *bytes.Buffer
 	tmp   [3 * 256]byte
 	stage int
-
-	pc *pngChunk
-	// ac *apngChunk
+	pc    *pngChunk
 }
 
 type pngChunk struct {
 	ihdr  []byte
 	idats []idat
 }
-
-// type apngChunk struct {
-// 	ihdr []byte
-// }
 
 func (c *chunkFetcher) parseIHDR(length uint32) error {
 	_, err := io.ReadFull(c.bb, c.tmp[:length])
@@ -229,10 +172,6 @@ func (c *chunkFetcher) parseIDAT(length uint32) error {
 	c.pc.idats = append(c.pc.idats, id)
 	return nil
 }
-
-// func (c *chunkFetcher) parseIEND(length uint32) error {
-// 	return nil
-// }
 
 func (c *chunkFetcher) parsePNGChunk() error {
 	_, err := io.ReadFull(c.bb, c.tmp[:8])
@@ -298,27 +237,16 @@ func fullfillFrameRegionConstraints(img []image.Image) bool {
 	if len(img) == 0 || img[0] == nil {
 		return false
 	}
-
 	reference := img[0].Bounds()
-
 	// constraints:
-	// 	x_offset >= 0 && y_offset >= 0
 	if !(reference.Min.X >= 0 && reference.Min.Y >= 0) {
 		return false
 	}
-
 	for i := 1; i < len(img); i++ {
 		if img[i] == nil {
 			return false
 		}
-
 		bounds := img[i].Bounds()
-
-		// constrains:
-		// 	   x_offset >= 0
-		// 	&& y_offset >= 0
-		// 	&& x_offset + width  = max_x <= first frame width
-		// 	&& y_offset + height = max_y <= first frame height
 		if !(bounds.Min.X >= 0 && bounds.Min.Y >= 0 && bounds.Max.X <= reference.Max.X && bounds.Max.Y <= reference.Max.Y) {
 			return false
 		}
@@ -326,15 +254,14 @@ func fullfillFrameRegionConstraints(img []image.Image) bool {
 	return true
 }
 
+// EncodeAll encodes the entire APNG struct to the io.Writer, validating input constraints.
 func EncodeAll(w io.Writer, a *APNG) error {
 	if len(a.Images) == 0 {
 		return errors.New("apng: need at least one image")
 	}
-
 	if len(a.Images) != len(a.Delays) {
 		return errors.New("apng: mismatched image and delay lengths")
 	}
-
 	if a.Disposals != nil && len(a.Images) != len(a.Disposals) {
 		return errors.New("apng: mismatch image and disposal lengths")
 	}
@@ -348,13 +275,14 @@ func EncodeAll(w io.Writer, a *APNG) error {
 	}
 
 	e := encoder{
-		a: a,
-		w: w,
+		aPNG:   a,
+		writer: w,
 	}
 
 	_, e.err = io.WriteString(w, pngHeader)
+
 	for i, img := range a.Images {
-		bb := new(bytes.Buffer)
+		bb := &bytes.Buffer{}
 		if err := png.Encode(bb, img); err != nil {
 			return errors.New("apng: png encoding error(" + err.Error() + ")")
 		}
@@ -377,6 +305,9 @@ func EncodeAll(w io.Writer, a *APNG) error {
 			e.writefdATs()
 		}
 	}
+
 	e.writeIEND()
+
 	return e.err
+
 }
