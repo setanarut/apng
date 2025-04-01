@@ -8,6 +8,11 @@ import (
 )
 
 // Save writes an APNG file with the given images and uniform frame delay.
+//
+// The successive delay times, one per frame, in 100ths of a second (centiseconds).
+//
+// Note: For 30 FPS, each frame lasts 1/30 second ≈ 3.33 centiseconds.
+// When using integer delays, you might use 3 centiseconds per frame.
 func Save(filePath string, images []image.Image, delay uint16) error {
 	totalFrames := len(images)
 	if totalFrames == 0 {
@@ -34,6 +39,11 @@ func Save(filePath string, images []image.Image, delay uint16) error {
 }
 
 // APNGBytes encodes a slice of images into an APNG byte stream with a consistent delay per frame.
+//
+// The successive delay times, one per frame, in 100ths of a second (centiseconds).
+//
+// Note: For 30 FPS, each frame lasts 1/30 second ≈ 3.33 centiseconds.
+// When using integer delays, you might use 3 centiseconds per frame.
 func APNGBytes(images []image.Image, delay uint16) ([]byte, error) {
 	totalFrames := len(images)
 	if totalFrames == 0 {

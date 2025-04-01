@@ -9,6 +9,8 @@ import (
 	"image"
 	"image/png"
 	"io"
+	"strconv"
+	"sync"
 )
 
 type idat []byte
@@ -38,13 +40,17 @@ func writeUint32(b []uint8, u uint32) {
 
 // APNG encapsulates animated PNG frames, their delays, disposal methods, loop count, and global configuration.
 type APNG struct {
-	Images    []image.Image // The successive images.
-	Delays    []uint16      // The successive delay times, one per frame, in 100ths of a second.
-	Disposals []byte        // The successive disposal methods, one per frame.
-	LoopCount uint32        // The loop count. 0 indicates infinite looping.
+	Images []image.Image // The successive images.
+
+	// The successive delay times, one per frame, in 100ths of a second (centiseconds).
+	//
+	// Note: For 30 FPS, each frame lasts 1/30 second ≈ 3.33 centiseconds.
+	// When using integer delays, you might use 3 centiseconds per frame.
+	Delays    []uint16
+	Disposals []byte // The successive disposal methods, one per frame.
+	LoopCount uint32 // The loop count. 0 indicates infinite looping.
 	Config    image.Config
 }
-
 type encoder struct {
 	aPNG   *APNG
 	writer io.Writer
@@ -281,20 +287,83 @@ func EncodeAll(w io.Writer, a *APNG) error {
 
 	_, e.err = io.WriteString(w, pngHeader)
 
+	// Data to be used while processing the first image
+	var mutex sync.Mutex
+
+	// Prepare PNG data for all frames in parallel
+	type frameData struct {
+		index int
+		ihdr  []byte
+		idats []idat // Changed from [][]byte to []idat
+	}
+
+	frameDataChan := make(chan frameData, len(a.Images))
+	var wg sync.WaitGroup
+
 	for i, img := range a.Images {
-		bb := &bytes.Buffer{}
-		if err := png.Encode(bb, img); err != nil {
-			return errors.New("apng: png encoding error(" + err.Error() + ")")
+		wg.Add(1)
+		go func(index int, image image.Image) {
+			defer wg.Done()
+
+			bb := &bytes.Buffer{}
+			if err := png.Encode(bb, image); err != nil {
+				// Use mutex to handle error state
+				mutex.Lock()
+				if e.err == nil {
+					e.err = errors.New("apng: png encoding error(" + err.Error() + ")")
+				}
+				mutex.Unlock()
+				return
+			}
+
+			pc, err := fetchPNGChunk(bb)
+			if err != nil {
+				mutex.Lock()
+				if e.err == nil {
+					e.err = err
+				}
+				mutex.Unlock()
+				return
+			}
+
+			// fmt.Printf("Frame %d calculated\n", index)
+
+			frameDataChan <- frameData{
+				index: index,
+				ihdr:  pc.ihdr,
+				idats: pc.idats, // The type of idats returned by fetchPNGChunk should be []idat
+			}
+		}(i, img)
+	}
+
+	// Wait for all goroutines to complete
+	go func() {
+		wg.Wait()
+		close(frameDataChan)
+	}()
+
+	// Write output in correct order
+	frameDataMap := make(map[int]frameData)
+	for fd := range frameDataChan {
+		frameDataMap[fd.index] = fd
+	}
+
+	// Error check
+	if e.err != nil {
+		return e.err
+	}
+
+	// Write the first frame and then other frames in correct order
+	for i := range a.Images {
+		fd, ok := frameDataMap[i]
+		if !ok {
+			return errors.New("apng: missing frame data for index " + strconv.Itoa(i))
 		}
 
-		pc, err := fetchPNGChunk(bb)
-		if err != nil {
-			return err
-		}
-		e.ihdr = pc.ihdr
-		e.idats = pc.idats
+		e.ihdr = fd.ihdr
+		e.idats = fd.idats
 
-		// First image is defalt image.
+		// The first image is the default image
 		if i == 0 {
 			e.writeIHDR()
 			e.writeacTL()
@@ -309,5 +378,4 @@ func EncodeAll(w io.Writer, a *APNG) error {
 	e.writeIEND()
 
 	return e.err
-
 }
