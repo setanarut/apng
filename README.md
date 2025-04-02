@@ -9,6 +9,18 @@ Fast APNG encoder. Very fast APNG encoding with parallel (Goroutines) computatio
 go get github.com/setanarut/apng
 ```
 
+## 20 frames animation encoding benchmark
+
+| Image Size | [kettek](https://github.com/kettek/apng) | [setanarut](https://github.com/setanarut/apng) |
+| ---------- | ---------------------------------------- | ---------------------------------------------- |
+| 125x125    | 173 ms                                   | 43 ms                                          |
+| 250x250    | 655 ms                                   | 153 ms                                         |
+| 500x500    | 2542 ms                                  | 565 ms                                         |
+| 1000x1000  | 10174 ms                                 | 2213 ms                                        |
+| 2000x2000  | 40745 ms                                 | 8831 ms                                        |
+
+<img width="1175" alt="bench" src="https://github.com/user-attachments/assets/54558177-8e13-42cb-9eb0-5c00a414ef9d" />
+
 ## Example
 
 ```Go
