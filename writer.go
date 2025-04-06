@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"hash/crc32"
 	"image"
 	"image/png"
@@ -121,6 +122,9 @@ func (e *encoder) writefcTL(frameIndex int) {
 	writeUint16(e.tmp[20:22], e.aPNG.Delays[frameIndex])        // Write delay_num(numerator).
 	writeUint16(e.tmp[22:24], uint16(100))                      // Write delay_den(denominator).
 	e.tmp[24] = 0
+	if e.aPNG.Disposals != nil {
+		e.tmp[24] = e.aPNG.Disposals[frameIndex] // Write dispose_op
+	}
 	e.tmp[25] = 0 // Write blend_op.
 
 	e.writeChunk(e.tmp[:26], "fcTL")
@@ -136,7 +140,7 @@ func (e *encoder) writeIDATs() {
 func (e *encoder) writefdATs() {
 	for _, id := range e.idats {
 		writeUint32(e.tmp[0:4], e.seqNum)
-		fdat := make([]byte, 4, len(id))
+		fdat := make([]byte, 4, len(id)+4)
 		copy(fdat, e.tmp[0:4])
 		fdat = append(fdat, id...)
 		e.writeChunk(fdat, "fdAT")
@@ -153,11 +157,15 @@ type chunkFetcher struct {
 	tmp   [3 * 256]byte
 	stage int
 	pc    *pngChunk
+	plte  []byte // PLTE chunk data
+	trns  []byte // tRNS chunk data
 }
 
 type pngChunk struct {
 	ihdr  []byte
 	idats []idat
+	plte  []byte
+	trns  []byte
 }
 
 func (c *chunkFetcher) parseIHDR(length uint32) error {
@@ -179,6 +187,46 @@ func (c *chunkFetcher) parseIDAT(length uint32) error {
 	return nil
 }
 
+func (c *chunkFetcher) parsePLTE(length uint32) error {
+	data := make([]byte, length)
+	_, err := io.ReadFull(c.bb, data)
+	if err != nil {
+		return err
+	}
+
+	c.plte = make([]byte, length+8) // 8 bytes: length (4) + chunk type (4)
+	writeUint32(c.plte[:4], length)
+	copy(c.plte[4:8], []byte("PLTE"))
+	copy(c.plte[8:], data)
+
+	// Store PLTE in the pngChunk if available
+	if c.pc != nil {
+		c.pc.plte = make([]byte, length)
+		copy(c.pc.plte, data)
+	}
+	return nil
+}
+
+func (c *chunkFetcher) parsetRNS(length uint32) error {
+	data := make([]byte, length)
+	_, err := io.ReadFull(c.bb, data)
+	if err != nil {
+		return err
+	}
+
+	c.trns = make([]byte, length+8) // 8 bytes: length (4) + chunk type (4)
+	writeUint32(c.trns[:4], length)
+	copy(c.trns[4:8], []byte("tRNS"))
+	copy(c.trns[8:], data)
+
+	// Store tRNS in the pngChunk if available
+	if c.pc != nil {
+		c.pc.trns = make([]byte, length)
+		copy(c.pc.trns, data)
+	}
+	return nil
+}
+
 func (c *chunkFetcher) parsePNGChunk() error {
 	_, err := io.ReadFull(c.bb, c.tmp[:8])
 	if err != nil {
@@ -191,18 +239,53 @@ func (c *chunkFetcher) parsePNGChunk() error {
 		c.stage = dsSeenIHDR
 		err = c.parseIHDR(length)
 	case "PLTE":
-		// todo
+		c.stage = dsSeenPLTE
+		err = c.parsePLTE(length)
 	case "tRNS":
-		// todo
+		c.stage = dsSeentRNS
+		err = c.parsetRNS(length)
 	case "IDAT":
 		c.stage = dsSeenIDAT
 		err = c.parseIDAT(length)
 	case "IEND":
 		c.stage = dsSeenIEND
 		err = nil
+	default:
+		// Skip other chunks
+		c.bb.Next(int(length))
 	}
 
 	c.bb.Next(4) // Get rid of crc(4 bytes).
+	return err
+}
+
+func (c *chunkFetcher) parsePNGChunkWithPalette() error {
+	_, err := io.ReadFull(c.bb, c.tmp[:8])
+	if err != nil {
+		return err
+	}
+	length := binary.BigEndian.Uint32(c.tmp[:4])
+
+	switch string(c.tmp[4:8]) {
+	case "IHDR":
+		c.stage = dsSeenIHDR
+		_, err = io.ReadFull(c.bb, c.tmp[:length]) // Just read but don't store
+	case "PLTE":
+		c.stage = dsSeenPLTE
+		err = c.parsePLTE(length)
+	case "tRNS":
+		c.stage = dsSeentRNS
+		err = c.parsetRNS(length)
+	case "IDAT":
+		c.stage = dsSeenIDAT
+		c.bb.Next(int(length)) // Skip IDAT content
+	case "IEND":
+		c.stage = dsSeenIEND
+	default:
+		c.bb.Next(int(length)) // Skip other chunks
+	}
+
+	c.bb.Next(4) // Skip CRC
 	return err
 }
 
@@ -225,18 +308,33 @@ func fetchPNGChunk(bb *bytes.Buffer) (*pngChunk, error) {
 	return c.pc, nil
 }
 
-func isSameColorModel(img []image.Image) bool {
-	if len(img) == 0 || img[0] == nil {
-		return false
+// fetchPaletteChunk extracts PLTE and tRNS chunks from paletted images
+func fetchPaletteChunk(bb *bytes.Buffer) (plte []byte, trns []byte, err error) {
+	bb.Next(len(pngHeader))
+	c := &chunkFetcher{
+		bb:    bb,
+		stage: dsStart,
 	}
 
-	reference := img[0].ColorModel()
-	for i := 1; i < len(img); i++ {
-		if img[i] == nil || img[i].ColorModel() != reference {
-			return false
+	for c.stage != dsSeenIEND {
+		if err := c.parsePNGChunkWithPalette(); err != nil {
+			if err == io.EOF {
+				err = io.ErrUnexpectedEOF
+			}
+			return nil, nil, err
 		}
 	}
-	return true
+	return c.plte, c.trns, nil
+}
+
+// encodePalettedImage encodes a paletted image for APNG format
+func encodePalettedImage(img *image.Paletted) (*pngChunk, error) {
+	bb := &bytes.Buffer{}
+	if err := png.Encode(bb, img); err != nil {
+		return nil, errors.New("apng: palette encoding error: " + err.Error())
+	}
+
+	return fetchPNGChunk(bb)
 }
 
 func fullfillFrameRegionConstraints(img []image.Image) bool {
@@ -271,11 +369,6 @@ func EncodeAll(w io.Writer, a *APNG) error {
 	if a.Disposals != nil && len(a.Images) != len(a.Disposals) {
 		return errors.New("apng: mismatch image and disposal lengths")
 	}
-
-	if !isSameColorModel(a.Images) {
-		return errors.New("apng: must be all the same color model of images")
-	}
-
 	if !fullfillFrameRegionConstraints(a.Images) {
 		return errors.New("apng: must fullfill frame region constraints")
 	}
@@ -289,12 +382,32 @@ func EncodeAll(w io.Writer, a *APNG) error {
 
 	// Data to be used while processing the first image
 	var mutex sync.Mutex
+	var hasFirstPaletted bool
+	var globalPLTE, globalTRNS []byte
+
+	// Check if the first image is paletted
+	if firstImg, ok := a.Images[0].(*image.Paletted); ok {
+		hasFirstPaletted = true
+
+		// Extract PLTE and tRNS chunks from the first paletted image
+		bb := &bytes.Buffer{}
+		if err := png.Encode(bb, firstImg); err != nil {
+			return errors.New("apng: png encoding error(" + err.Error() + ")")
+		}
+
+		var err error
+		globalPLTE, globalTRNS, err = fetchPaletteChunk(bb)
+		if err != nil {
+			return err
+		}
+	}
 
 	// Prepare PNG data for all frames in parallel
 	type frameData struct {
-		index int
-		ihdr  []byte
-		idats []idat // Changed from [][]byte to []idat
+		index      int
+		ihdr       []byte
+		idats      []idat
+		isPaletted bool
 	}
 
 	frameDataChan := make(chan frameData, len(a.Images))
@@ -302,21 +415,30 @@ func EncodeAll(w io.Writer, a *APNG) error {
 
 	for i, img := range a.Images {
 		wg.Add(1)
-		go func(index int, image image.Image) {
+		go func(index int, img image.Image) {
 			defer wg.Done()
 
-			bb := &bytes.Buffer{}
-			if err := png.Encode(bb, image); err != nil {
-				// Use mutex to handle error state
-				mutex.Lock()
-				if e.err == nil {
-					e.err = errors.New("apng: png encoding error(" + err.Error() + ")")
+			// Check for paletted image
+			paletted, isPaletted := img.(*image.Paletted)
+
+			var pc *pngChunk
+			var err error
+
+			if isPaletted {
+				pc, err = encodePalettedImage(paletted)
+			} else {
+				bb := &bytes.Buffer{}
+				if err := png.Encode(bb, img); err != nil {
+					mutex.Lock()
+					if e.err == nil {
+						e.err = errors.New("apng: png encoding error(" + err.Error() + ")")
+					}
+					mutex.Unlock()
+					return
 				}
-				mutex.Unlock()
-				return
+				pc, err = fetchPNGChunk(bb)
 			}
 
-			pc, err := fetchPNGChunk(bb)
 			if err != nil {
 				mutex.Lock()
 				if e.err == nil {
@@ -326,12 +448,12 @@ func EncodeAll(w io.Writer, a *APNG) error {
 				return
 			}
 
-			// fmt.Printf("Frame %d calculated\n", index)
-
+			fmt.Println(index)
 			frameDataChan <- frameData{
-				index: index,
-				ihdr:  pc.ihdr,
-				idats: pc.idats, // The type of idats returned by fetchPNGChunk should be []idat
+				index:      index,
+				ihdr:       pc.ihdr,
+				idats:      pc.idats,
+				isPaletted: isPaletted,
 			}
 		}(i, img)
 	}
@@ -353,8 +475,33 @@ func EncodeAll(w io.Writer, a *APNG) error {
 		return e.err
 	}
 
-	// Write the first frame and then other frames in correct order
-	for i := range a.Images {
+	// Setup for the first frame
+	fd, ok := frameDataMap[0]
+	if !ok {
+		return errors.New("apng: missing frame data for index 0")
+	}
+
+	e.ihdr = fd.ihdr
+	e.idats = fd.idats
+
+	e.writeIHDR()
+
+	// Write PLTE and tRNS chunks for paletted images
+	if hasFirstPaletted && globalPLTE != nil {
+		e.writeChunk(globalPLTE[8:8+binary.BigEndian.Uint32(globalPLTE[:4])], "PLTE")
+
+		// Write tRNS only if it exists
+		if globalTRNS != nil {
+			e.writeChunk(globalTRNS[8:8+binary.BigEndian.Uint32(globalTRNS[:4])], "tRNS")
+		}
+	}
+
+	e.writeacTL()
+	e.writefcTL(0)
+	e.writeIDATs()
+
+	// Process other frames
+	for i := 1; i < len(a.Images); i++ {
 		fd, ok := frameDataMap[i]
 		if !ok {
 			return errors.New("apng: missing frame data for index " + strconv.Itoa(i))
@@ -363,16 +510,8 @@ func EncodeAll(w io.Writer, a *APNG) error {
 		e.ihdr = fd.ihdr
 		e.idats = fd.idats
 
-		// The first image is the default image
-		if i == 0 {
-			e.writeIHDR()
-			e.writeacTL()
-			e.writefcTL(i)
-			e.writeIDATs()
-		} else {
-			e.writefcTL(i)
-			e.writefdATs()
-		}
+		e.writefcTL(i)
+		e.writefdATs()
 	}
 
 	e.writeIEND()

@@ -15,3 +15,5 @@
 
 .gvm
 vendor/
+outPaletted.png
+outRGBA.png
