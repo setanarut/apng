@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
-	"fmt"
 	"hash/crc32"
 	"image"
 	"image/png"
@@ -448,7 +447,6 @@ func EncodeAll(w io.Writer, a *APNG) error {
 				return
 			}
 
-			fmt.Println(index)
 			frameDataChan <- frameData{
 				index:      index,
 				ihdr:       pc.ihdr,
