@@ -12,14 +12,14 @@ const FrameCount int = 30
 
 func main() {
 	frames := make([]image.Image, FrameCount)
-	// frames2 := make([]image.Image, FrameCount)
+	frames2 := make([]image.Image, FrameCount)
 
 	for i := range FrameCount {
 		frames[i] = generatePalettedFrames(600, 200)
-		// frames2[i] = generateRGBAFrames(600, 200)
+		frames2[i] = generateRGBAFrames(600, 200)
 	}
 	apng.Save("outPaletted.png", frames, 7)
-	// apng.Save("outRGBA.png", frames2, 7)
+	apng.Save("outRGBA.png", frames2, 7)
 }
 
 func generateRGBAFrames(width, height int) *image.RGBA {
