@@ -1,7 +1,7 @@
 [![GoDoc](https://godoc.org/github.com/setanarut/apng?status.svg)](https://pkg.go.dev/github.com/setanarut/apng)
 
 # apng
-Fast APNG encoder. Very fast APNG encoding with parallel (Goroutines) computation.
+Fast APNG encoding with concurrent frame encoding.
 
 ## Installation
 
