@@ -40,12 +40,12 @@ func writeUint32(b []uint8, u uint32) {
 
 // APNG encapsulates animated PNG frames, their delays, disposal methods, loop count, and global configuration.
 type APNG struct {
-	Images []image.Image // The successive images.
+	// The successive images.
+	//
+	// Images obtained via SubImage() are not supported, If an image is a sub-image, copy it into a new image before encoding.
+	Images []image.Image
 
 	// The successive delay times, one per frame, in 100ths of a second (centiseconds).
-	//
-	// Note: For 30 FPS, each frame lasts 1/30 second ≈ 3.33 centiseconds.
-	// When using integer delays, you might use 3 centiseconds per frame.
 	Delays    []uint16
 	Disposals []byte // The successive disposal methods, one per frame.
 	LoopCount uint32 // The loop count. 0 indicates infinite looping.

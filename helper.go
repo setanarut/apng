@@ -4,19 +4,19 @@ import (
 	"bytes"
 	"errors"
 	"image"
+	"log"
 	"os"
 )
 
 // Save writes an APNG file with the given images and uniform frame delay.
 //
-// The successive delay times, one per frame, in 100ths of a second (centiseconds).
+// Images obtained via image.SubImage() are not supported, If an image is a sub-image, copy it into a new image before encoding.
 //
-// Note: For 30 FPS, each frame lasts 1/30 second ≈ 3.33 centiseconds.
-// When using integer delays, you might use 3 centiseconds per frame.
-func Save(filePath string, images []image.Image, delay uint16) error {
+// The successive delay times, one per frame, in 100ths of a second (centiseconds).
+func Save(filePath string, images []image.Image, delay uint16) {
 	totalFrames := len(images)
 	if totalFrames == 0 {
-		return errors.New("apng: no images provided")
+		log.Fatal("apng: no images provided")
 	}
 
 	delays := make([]uint16, totalFrames)
@@ -31,19 +31,19 @@ func Save(filePath string, images []image.Image, delay uint16) error {
 
 	file, err := os.Create(filePath)
 	if err != nil {
-		return err
+		log.Fatal(err)
 	}
 	defer file.Close()
 
-	return EncodeAll(file, &animPng)
+	encodeError := EncodeAll(file, &animPng)
+	log.Fatal(encodeError)
 }
 
 // APNGBytes encodes a slice of images into an APNG byte stream with a consistent delay per frame.
 //
-// The successive delay times, one per frame, in 100ths of a second (centiseconds).
+// Images obtained via image.SubImage() are not supported, If an image is a sub-image, copy it into a new image before encoding.
 //
-// Note: For 30 FPS, each frame lasts 1/30 second ≈ 3.33 centiseconds.
-// When using integer delays, you might use 3 centiseconds per frame.
+// The successive delay times, one per frame, in 100ths of a second (centiseconds).
 func APNGBytes(images []image.Image, delay uint16) ([]byte, error) {
 	totalFrames := len(images)
 	if totalFrames == 0 {
