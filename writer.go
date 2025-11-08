@@ -40,12 +40,11 @@ func writeUint32(b []uint8, u uint32) {
 
 // APNG encapsulates animated PNG frames, their delays, disposal methods, loop count, and global configuration.
 type APNG struct {
-	Images []image.Image // The successive images.
-
-	// The successive delay times, one per frame, in 100ths of a second (centiseconds).
+	// The successive images.
 	//
-	// Note: For 30 FPS, each frame lasts 1/30 second ≈ 3.33 centiseconds.
-	// When using integer delays, you might use 3 centiseconds per frame.
+	// Images obtained via SubImage() are not supported, If an image is a sub-image, copy it into a new image before encoding.
+	Images []image.Image
+	// The successive delay times, one per frame, in 100ths of a second (centiseconds).
 	Delays    []uint16
 	Disposals []byte // The successive disposal methods, one per frame.
 	LoopCount uint32 // The loop count. 0 indicates infinite looping.
@@ -358,6 +357,8 @@ func fullfillFrameRegionConstraints(img []image.Image) bool {
 }
 
 // EncodeAll encodes the entire APNG struct to the io.Writer, validating input constraints.
+//
+// Images obtained via SubImage() are not supported, If an image is a sub-image, copy it into a new image before encoding.
 func EncodeAll(w io.Writer, a *APNG) error {
 	if len(a.Images) == 0 {
 		return errors.New("apng: need at least one image")
