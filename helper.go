@@ -2,7 +2,6 @@ package apng
 
 import (
 	"bytes"
-	"errors"
 	"image"
 	"log"
 	"os"
@@ -36,7 +35,9 @@ func Save(filePath string, images []image.Image, delay uint16) {
 	defer file.Close()
 
 	encodeError := EncodeAll(file, &animPng)
-	log.Fatal(encodeError)
+	if encodeError != nil {
+		log.Fatal(encodeError)
+	}
 }
 
 // APNGBytes encodes a slice of images into an APNG byte stream with a consistent delay per frame.
@@ -44,10 +45,10 @@ func Save(filePath string, images []image.Image, delay uint16) {
 // Images obtained via image.SubImage() are not supported, If an image is a sub-image, copy it into a new image before encoding.
 //
 // The successive delay times, one per frame, in 100ths of a second (centiseconds).
-func APNGBytes(images []image.Image, delay uint16) ([]byte, error) {
+func APNGBytes(images []image.Image, delay uint16) []byte {
 	totalFrames := len(images)
 	if totalFrames == 0 {
-		return nil, errors.New("apng: no images provided")
+		log.Fatal("apng: no images provided")
 	}
 
 	delays := make([]uint16, totalFrames)
@@ -65,8 +66,8 @@ func APNGBytes(images []image.Image, delay uint16) ([]byte, error) {
 
 	// Encode to buffer instead of file
 	if err := EncodeAll(buf, &animPng); err != nil {
-		return nil, err
+		log.Fatal(err)
 	}
 
-	return buf.Bytes(), nil
+	return buf.Bytes()
 }
