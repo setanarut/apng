@@ -44,7 +44,6 @@ type APNG struct {
 	//
 	// Images obtained via SubImage() are not supported, If an image is a sub-image, copy it into a new image before encoding.
 	Images []image.Image
-
 	// The successive delay times, one per frame, in 100ths of a second (centiseconds).
 	Delays    []uint16
 	Disposals []byte // The successive disposal methods, one per frame.
@@ -358,6 +357,8 @@ func fullfillFrameRegionConstraints(img []image.Image) bool {
 }
 
 // EncodeAll encodes the entire APNG struct to the io.Writer, validating input constraints.
+//
+// Images obtained via SubImage() are not supported, If an image is a sub-image, copy it into a new image before encoding.
 func EncodeAll(w io.Writer, a *APNG) error {
 	if len(a.Images) == 0 {
 		return errors.New("apng: need at least one image")
